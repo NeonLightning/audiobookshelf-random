@@ -989,6 +989,12 @@
             }
 
             // ─── playback ──────────────────────────────────────────
+            function trackUrl(contentUrl) {
+                // contentUrl is server-relative (e.g. /api/items/<id>/file/<ino>);
+                // the <audio> element can't send an Authorization header, so pass the token as a query param
+                var url = /^https?:\/\//i.test(contentUrl) ? contentUrl : apiUrl(contentUrl);
+                return url + (url.indexOf('?') === -1 ? '?' : '&') + 'token=' + encodeURIComponent(state.token);
+            }
             async function loadAndPlay(itemId) {
                 setStatus('Loading audio…');
                 try {
@@ -997,7 +1003,7 @@
                     var media = item.media || {};
                     var rawTracks = media.tracks || [];
                     var tracks = rawTracks.map(function(t) {
-                        return { startOffset: t.startOffset || 0, duration: t.duration || 0, url: t.contentUrl };
+                        return { startOffset: t.startOffset || 0, duration: t.duration || 0, url: trackUrl(t.contentUrl) };
                     }).sort(function(a, b) { return a.startOffset - b.startOffset; });
                     if (!tracks.length) throw new Error('This item has no playable audio tracks.');
                     state.tracks = tracks;
