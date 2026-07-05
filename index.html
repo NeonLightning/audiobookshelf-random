@@ -283,6 +283,19 @@
         .sleep-popup .popup-opt.danger { color: var(--danger); }
         .sleep-popup .popup-opt .opt-label { display: inline-block; width: 32px; }
 
+        /* ─── Hotkey Hint ─── */
+        .hotkey-hint {
+            display: inline-block;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-color);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            color: var(--text-dim);
+            font-family: monospace;
+            margin-left: 4px;
+        }
+
         /* ─── Misc ─── */
         .empty-state { text-align: center; padding: 40px 20px; color: var(--text-dim); }
         .empty-state .glyph { font-size: 40px; margin-bottom: 8px; }
@@ -319,6 +332,7 @@
             .transport { gap: 10px; }
             .player-foot { flex-direction: column; align-items: stretch; }
             .player-foot .left-group, .player-foot .right-group { justify-content: center; }
+            .hotkey-hint { display: none; }
         }
     </style>
 </head>
@@ -374,7 +388,7 @@
                             <option value="standalone">📄 Standalone Only</option>
                             <option value="inprogress">🔄 In‑Progress Series</option>
                         </select>
-                        <button class="draw-btn" id="drawBtn">Draw a card</button>
+                        <button class="draw-btn" id="drawBtn">Draw a card <span class="hotkey-hint">R</span></button>
                     </div>
                 </div>
 
@@ -396,9 +410,9 @@
                     </div>
 
                     <div class="transport">
-                        <button id="back15">-15s</button>
-                        <button class="play-pause" id="playPauseBtn">Play</button>
-                        <button id="fwd30">+30s</button>
+                        <button id="back15"><span class="hotkey-hint">[</span> -15s</button>
+                        <button class="play-pause" id="playPauseBtn"><span class="hotkey-hint">SPC</span> Play</button>
+                        <button id="fwd30">+30s <span class="hotkey-hint">]</span></button>
                     </div>
 
                     <div class="player-foot">
@@ -422,6 +436,7 @@
                                 <button class="sleep-btn" id="sleepBtn" aria-label="Sleep timer">
                                     <span>⏱</span>
                                     <span class="sleep-label" id="sleepLabel">Off</span>
+                                    <span class="hotkey-hint">S</span>
                                 </button>
                                 <div class="sleep-popup" id="sleepPopup">
                                     <div class="popup-title">Sleep timer</div>
@@ -1002,235 +1017,234 @@
             }
             function setupPlayerHeader(item) {
                 var meta = item.media && item.media.metadata || {};
-                playerTitle.textContent = meta.title || 'Untitled';
-                var sub = meta.authorName || '';
-                if (meta.seriesName) sub += (sub ? ' · ' : '') + meta.seriesName;
-                playerSub.textContent = sub;
+                playerTitle.textContent = meta.title || 'Unknown Title';
+                playerSub.textContent = meta.authorName || 'Unknown Author';
                 playerCoverImg.src = coverUrl(item.id);
+                playerCoverImg.alt = meta.title || '';
             }
-            function trackIndexForOffset(t) {
-                for (var i = state.tracks.length - 1; i >= 0; i--) {
-                    if (t >= state.tracks[i].startOffset - 0.05) return i;
-                }
-                return 0;
-            }
-            function seekToGlobalTime(t, autoplay) {
-                t = Math.max(0, Math.min(t, state.totalDuration));
-                var idx = trackIndexForOffset(t);
-                var track = state.tracks[idx];
-                var localTime = t - track.startOffset;
-                var needsSrcChange = state.activeTrackIndex !== idx;
-                state.activeTrackIndex = idx;
-                var applyTime = function() {
-                    audioEl.currentTime = localTime;
-                    if (autoplay) audioEl.play().catch(function() {});
-                };
-                if (needsSrcChange) {
-                    audioEl.src = apiUrl(track.url) + '?token=' + encodeURIComponent(state.token);
-                    audioEl.addEventListener('loadedmetadata', applyTime, { once: true });
-                    audioEl.load();
-                } else {
-                    applyTime();
-                }
-            }
-            function currentGlobalTime() {
-                var track = state.tracks[state.activeTrackIndex];
-                if (!track) return 0;
-                return track.startOffset + audioEl.currentTime;
-            }
-            audioEl.addEventListener('ended', function() {
-                var nextIdx = state.activeTrackIndex + 1;
-                if (nextIdx < state.tracks.length) {
-                    seekToGlobalTime(state.tracks[nextIdx].startOffset, true);
-                } else {
-                    saveProgress(true);
-                    setStatus('Finished — nice. Draw another card whenever you\u2019re ready.');
-                }
-            });
-            audioEl.addEventListener('timeupdate', function() {
-                if (state.activeTrackIndex < 0) return;
-                var t = currentGlobalTime();
-                if (!seekBar.matches(':active')) seekBar.value = String(Math.floor(t));
-                curTimeLabel.textContent = fmtTime(t);
-                if (sleep.active && !audioEl.paused) {
-                    var rem = Math.max(0, (sleep.endTime - Date.now()) / 1000);
-                    if (rem <= 0) {
-                        handleSleepExpired();
-                    } else {
-                        updateSleepButtonDisplay(rem);
+            function findTrackForGlobalTime(globalTime) {
+                for (var i = 0; i < state.tracks.length; i++) {
+                    var t = state.tracks[i];
+                    if (globalTime >= t.startOffset && globalTime < t.startOffset + t.duration) {
+                        return { trackIndex: i, localTime: globalTime - t.startOffset };
                     }
                 }
-            });
-            audioEl.addEventListener('play', function() {
-                playPauseBtn.textContent = 'Pause';
-                scheduleAutoSave();
-            });
-            audioEl.addEventListener('pause', function() {
-                playPauseBtn.textContent = 'Play';
-                saveProgress(false);
+                if (state.tracks.length === 0) return { trackIndex: 0, localTime: 0 };
+                if (globalTime >= state.totalDuration) {
+                    var last = state.tracks[state.tracks.length - 1];
+                    return { trackIndex: state.tracks.length - 1, localTime: last.duration };
+                }
+                return { trackIndex: 0, localTime: 0 };
+            }
+            function seekToGlobalTime(globalTime, autoPlay) {
+                var info = findTrackForGlobalTime(globalTime);
+                state.activeTrackIndex = info.trackIndex;
+                audioEl.src = state.tracks[info.trackIndex].url;
+                audioEl.currentTime = info.localTime;
+                curTimeLabel.textContent = fmtTime(globalTime);
+                seekBar.value = String(Math.floor(globalTime));
+                if (autoPlay) audioEl.play();
+            }
+            function handleAudioEnded() {
+                state.activeTrackIndex++;
+                if (state.activeTrackIndex < state.tracks.length) {
+                    audioEl.src = state.tracks[state.activeTrackIndex].url;
+                    audioEl.play();
+                } else {
+                    playPauseBtn.textContent = '▶ Play';
+                    markAsFinished();
+                }
+            }
+            audioEl.addEventListener('ended', handleAudioEnded);
+            audioEl.addEventListener('timeupdate', function() {
+                var globalTime = state.tracks[state.activeTrackIndex].startOffset + audioEl.currentTime;
+                curTimeLabel.textContent = fmtTime(globalTime);
+                seekBar.value = String(Math.floor(globalTime));
+                scheduleSaveProgress(globalTime);
             });
             playPauseBtn.addEventListener('click', function() {
-                if (audioEl.paused) audioEl.play().catch(function() {});
-                else audioEl.pause();
+                if (audioEl.paused) {
+                    audioEl.play();
+                    playPauseBtn.textContent = '⏸ Pause';
+                } else {
+                    audioEl.pause();
+                    playPauseBtn.textContent = '▶ Play';
+                }
             });
-            back15Btn.addEventListener('click', function() { seekToGlobalTime(currentGlobalTime() - 15, !audioEl.paused); });
-            fwd30Btn.addEventListener('click', function() { seekToGlobalTime(currentGlobalTime() + 30, !audioEl.paused); });
+            back15Btn.addEventListener('click', function() {
+                var globalTime = state.tracks[state.activeTrackIndex].startOffset + audioEl.currentTime;
+                seekToGlobalTime(Math.max(0, globalTime - 15), true);
+            });
+            fwd30Btn.addEventListener('click', function() {
+                var globalTime = state.tracks[state.activeTrackIndex].startOffset + audioEl.currentTime;
+                seekToGlobalTime(Math.min(state.totalDuration, globalTime + 30), true);
+            });
             seekBar.addEventListener('change', function() {
-                seekToGlobalTime(parseFloat(seekBar.value), !audioEl.paused);
+                var globalTime = parseFloat(seekBar.value);
+                seekToGlobalTime(globalTime, !audioEl.paused);
             });
             speedSelect.addEventListener('change', function() {
                 audioEl.playbackRate = parseFloat(speedSelect.value);
             });
-            function scheduleAutoSave() {
-                if (state.saveTimer) return;
-                state.saveTimer = setInterval(function() {
-                    if (!audioEl.paused) saveProgress(false);
-                }, 15000);
+            function scheduleSaveProgress(globalTime) {
+                if (state.saveTimer) clearTimeout(state.saveTimer);
+                syncIndicator.textContent = 'saving…';
+                syncIndicator.classList.add('saving');
+                state.saveTimer = setTimeout(function() {
+                    saveProgress(globalTime);
+                }, 3000);
+            }
+            function saveProgress(globalTime) {
+                if (!state.currentFullItem) return;
+                apiFetch('/api/me/progress/' + state.currentFullItem.id, {
+                    method: 'PATCH',
+                    json: { currentTime: globalTime, isFinished: false },
+                    keepalive: true
+                }).then(function() {
+                    syncIndicator.textContent = 'progress saved';
+                    syncIndicator.classList.remove('saving');
+                }).catch(function() {
+                    syncIndicator.textContent = 'save failed';
+                });
+            }
+            function markAsFinished() {
+                if (!state.currentFullItem) return;
+                apiFetch('/api/me/progress/' + state.currentFullItem.id, {
+                    method: 'PATCH',
+                    json: { isFinished: true, currentTime: state.totalDuration },
+                    keepalive: true
+                }).catch(function() {});
             }
             function stopPlaybackAndSaving() {
                 audioEl.pause();
-                audioEl.removeAttribute('src');
+                audioEl.src = '';
+                if (state.saveTimer) clearTimeout(state.saveTimer);
+                state.tracks = [];
+                state.totalDuration = 0;
                 state.activeTrackIndex = -1;
-                if (state.saveTimer) { clearInterval(state.saveTimer);
-                    state.saveTimer = null; }
             }
-            async function saveProgress(finishedOverride) {
-                if (!state.currentFullItem || state.activeTrackIndex < 0) return;
-                var t = currentGlobalTime();
-                var duration = state.totalDuration || 1;
-                var progress = Math.min(1, t / duration);
-                var isFinished = typeof finishedOverride === 'boolean' ? finishedOverride : progress > 0.99;
-                syncIndicator.textContent = 'saving…';
-                syncIndicator.classList.add('saving');
-                try {
-                    await apiFetch('/api/me/progress/' + state.currentFullItem.id, {
-                        method: 'PATCH',
-                        json: {
-                            currentTime: t,
-                            duration: duration,
-                            progress: progress,
-                            isFinished: isFinished
-                        },
-                        keepalive: true
-                    });
-                    syncIndicator.textContent = 'progress saved';
-                } catch (e) {
-                    syncIndicator.textContent = 'save failed';
-                } finally {
-                    syncIndicator.classList.remove('saving');
-                }
-            }
-            window.addEventListener('beforeunload', function() {
-                if (state.currentFullItem && state.activeTrackIndex >= 0) {
-                    var t = currentGlobalTime();
-                    var duration = state.totalDuration || 1;
-                    try {
-                        navigator.sendBeacon && navigator.sendBeacon;
-                        fetch(apiUrl('/api/me/progress/' + state.currentFullItem.id), {
-                            method: 'PATCH',
-                            headers: { 'Authorization': 'Bearer ' + state.token,
-                                'Content-Type': 'application/json' },
-                            body: JSON.stringify({ currentTime: t, duration: duration,
-                            progress: Math.min(1, t / duration) }),
-                            keepalive: true
-                        });
-                    } catch (e) {}
-                }
-            });
 
-            // ─── sleep timer ──────────────────────────────────────
-            function updateSleepButtonDisplay(remainingSec) {
-                if (!sleep.active) {
-                    sleepLabel.textContent = 'Off';
-                    sleepBtn.classList.remove('active');
-                    return;
-                }
-                var mins = Math.floor(remainingSec / 60);
-                var secs = Math.floor(remainingSec % 60);
-                var label = mins + ':' + String(secs).padStart(2, '0');
-                sleepLabel.textContent = label;
-                sleepBtn.classList.add('active');
-            }
-            function handleSleepExpired() {
-                if (!sleep.active) return;
-                cancelSleepTimer();
-                audioEl.pause();
-                setStatus('⏱ Sleep timer expired — playback paused.', false, true);
-            }
-            function cancelSleepTimer() {
-                sleep.active = false;
-                if (sleep.interval) {
-                    clearInterval(sleep.interval);
-                    sleep.interval = null;
-                }
-                sleep.endTime = null;
-                sleep.remaining = 0;
-                updateSleepButtonDisplay(0);
-                sleepBtn.classList.remove('active');
-                sleepLabel.textContent = 'Off';
-                sleepPopup.classList.remove('open');
-            }
-            function startSleepTimer(minutes) {
-                if (minutes <= 0) {
-                    cancelSleepTimer();
-                    return;
-                }
-                cancelSleepTimer();
-                var seconds = minutes * 60;
-                sleep.active = true;
-                sleep.endTime = Date.now() + seconds * 1000;
-                sleep.remaining = seconds;
-                updateSleepButtonDisplay(seconds);
-                if (sleep.interval) clearInterval(sleep.interval);
-                sleep.interval = setInterval(function() {
-                    var rem = Math.max(0, (sleep.endTime - Date.now()) / 1000);
-                    sleep.remaining = rem;
-                    if (rem <= 0) {
-                        handleSleepExpired();
-                    } else {
-                        updateSleepButtonDisplay(rem);
-                    }
-                }, 1000);
-                setStatus('⏱ Sleep timer set for ' + minutes + ' min', false, true);
-                sleepPopup.classList.remove('open');
-            }
-            sleepBtn.addEventListener('click', function(e) {
-                e.stopPropagation();
+            // ─── Sleep Timer ───────────────────────────────────────
+            sleepBtn.addEventListener('click', function() {
                 sleepPopup.classList.toggle('open');
             });
-            document.addEventListener('click', function(e) {
-                if (!sleepBtn.contains(e.target) && !sleepPopup.contains(e.target)) {
-                    sleepPopup.classList.remove('open');
-                }
-            });
-            sleepPopup.querySelectorAll('.popup-opt').forEach(function(btn) {
+            document.querySelectorAll('.sleep-popup .popup-opt').forEach(function(btn) {
                 btn.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    var mins = parseInt(this.getAttribute('data-minutes'), 10);
-                    if (mins === 0) {
-                        cancelSleepTimer();
-                        setStatus('Sleep timer cancelled.');
-                    } else {
-                        startSleepTimer(mins);
-                    }
+                    e.preventDefault();
+                    var mins = parseInt(btn.getAttribute('data-minutes'));
+                    setSleepTimer(mins);
                     sleepPopup.classList.remove('open');
                 });
             });
-
-            // ─── boot ──────────────────────────────────────────────
-            async function enterApp() {
-                loginView.hidden = true;
-                mainView.hidden = false;
-                await loadLibraries();
-                if (!state.libraries.length) {
-                    setStatus('No audiobook libraries found on this server.', true);
+            function setSleepTimer(minutes) {
+                if (sleep.interval) clearInterval(sleep.interval);
+                if (minutes === 0) {
+                    sleep.active = false;
+                    sleep.endTime = null;
+                    sleep.remaining = 0;
+                    sleepBtn.classList.remove('active');
+                    sleepLabel.textContent = 'Off';
+                    setStatus('', false, false);
+                    return;
                 }
-                drawModeSelect.value = state.drawMode;
+                sleep.active = true;
+                sleep.endTime = new Date().getTime() + minutes * 60000;
+                sleep.remaining = minutes * 60;
+                sleepBtn.classList.add('active');
+                updateSleepDisplay();
+                sleep.interval = setInterval(updateSleep, 1000);
             }
-            (async function boot() {
-                var restored = await tryRestoreSession();
-                if (restored) await enterApp();
-            })();
+            function updateSleep() {
+                var now = new Date().getTime();
+                var remaining = Math.max(0, sleep.endTime - now);
+                sleep.remaining = Math.ceil(remaining / 1000);
+                if (sleep.remaining <= 0) {
+                    audioEl.pause();
+                    setSleepTimer(0);
+                    setStatus('Sleep timer ended', false, false);
+                    return;
+                }
+                updateSleepDisplay();
+                if (sleep.remaining <= 60) {
+                    setStatus('Sleep timer: ' + sleep.remaining + 's', false, true);
+                }
+            }
+            function updateSleepDisplay() {
+                if (!sleep.active) return;
+                var mins = Math.floor(sleep.remaining / 60);
+                var secs = sleep.remaining % 60;
+                sleepLabel.textContent = mins + ':' + String(secs).padStart(2, '0');
+            }
+            function cancelSleepTimer() {
+                if (sleep.interval) clearInterval(sleep.interval);
+                sleep.active = false;
+                sleep.endTime = null;
+                sleep.remaining = 0;
+            }
+
+            // ─── Navigation & Entry ────────────────────────────────
+            async function enterApp() {
+                try {
+                    await loadLibraries();
+                    loginView.hidden = true;
+                    mainView.hidden = false;
+                } catch (err) {
+                    loginError.textContent = 'Failed to load libraries: ' + err.message;
+                    loginError.hidden = false;
+                }
+            }
+            window.addEventListener('load', async function() {
+                if (await tryRestoreSession()) {
+                    await enterApp();
+                }
+            });
+
+            // ─── HOTKEYS ────────────────────────────────────────────
+            document.addEventListener('keydown', function(e) {
+                // Don't intercept if focused on input
+                if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'SELECT' || document.activeElement.tagName === 'TEXTAREA') {
+                    return;
+                }
+
+                // Space: Play/Pause
+                if (e.code === 'Space' && !player.hidden) {
+                    e.preventDefault();
+                    playPauseBtn.click();
+                }
+                // R: Draw card
+                else if ((e.key === 'r' || e.key === 'R') && !drawBtn.disabled) {
+                    drawBtn.click();
+                }
+                // [: Back 15s
+                else if ((e.key === '[' || e.key === '{') && !player.hidden) {
+                    e.preventDefault();
+                    back15Btn.click();
+                }
+                // ]: Forward 30s
+                else if ((e.key === ']' || e.key === '}') && !player.hidden) {
+                    e.preventDefault();
+                    fwd30Btn.click();
+                }
+                // S: Toggle sleep timer popup
+                else if ((e.key === 's' || e.key === 'S') && !player.hidden) {
+                    e.preventDefault();
+                    sleepBtn.click();
+                }
+                // D: Toggle dark mode
+                else if ((e.key === 'd' || e.key === 'D')) {
+                    e.preventDefault();
+                    themeToggle.click();
+                }
+                // 1-9: Set playback speed
+                else if (e.key >= '1' && e.key <= '9' && !player.hidden) {
+                    var speeds = ['0.8', '1', '1.25', '1.5', '1.75', '2', '2.25', '2.5', '2.75', '3'];
+                    var idx = parseInt(e.key) - 1;
+                    if (idx < speeds.length) {
+                        speedSelect.value = speeds[idx];
+                        speedSelect.dispatchEvent(new Event('change'));
+                    }
+                }
+            });
         })();
     </script>
 </body>
