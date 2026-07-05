@@ -173,6 +173,17 @@
         .card-meta .series-line { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
         .card-meta h3 { font-size: 18px; margin: 2px 0 4px; }
         .card-meta .author-line { color: var(--text-dim); font-size: 14px; }
+        .card-description {
+            font-size: 13.5px;
+            line-height: 1.55;
+            color: var(--text-dim);
+            margin-top: 14px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-color);
+            max-height: 120px;
+            overflow-y: auto;
+        }
+        .card-description:empty { display: none; }
         .card-actions { display: flex; gap: 12px; margin-top: 16px; }
 
         /* ─── Player ─── */
@@ -946,6 +957,7 @@
                     '<div class="author-line">' + escapeHtml(pick.author) + '</div>' +
                     '</div>' +
                     '</div>' +
+                    '<div class="card-description" id="cardDescription"></div>' +
                     '<div class="card-actions">' +
                     '<button class="ghost-btn play" id="playPickBtn">' + (pick.continuing ? 'Resume' : 'Play') +
                     '</button>' +
@@ -953,6 +965,12 @@
                 cardSlot.innerHTML = '';
                 cardSlot.appendChild(card);
                 $('playPickBtn').addEventListener('click', function() { loadAndPlay(pick.itemId); });
+
+                apiFetch('/api/items/' + pick.itemId + '?expanded=1').then(function(item) {
+                    var desc = item && item.media && item.media.metadata && item.media.metadata.description;
+                    var el = $('cardDescription');
+                    if (desc && el) el.textContent = desc;
+                }).catch(function() {});
             }
 
             // ─── playback ──────────────────────────────────────────
